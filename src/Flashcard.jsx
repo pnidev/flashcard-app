@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const QuizletLearnMode = ({ questionData, onAnswer }) => {
+const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookmark }) => {
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [isAnswered, setIsAnswered] = useState(false);
 
@@ -10,45 +10,59 @@ const QuizletLearnMode = ({ questionData, onAnswer }) => {
     setIsAnswered(false);
   }, [questionData]);
 
-  const handleOptionClick = (key) => {
+  const handleOptionClick = (key, event) => {
     if (isAnswered) return; // Không cho click thêm nếu đã trả lời
+    if (event) {
+      event.preventDefault();
+      event.currentTarget.blur(); // Chống giật trang khi mất focus
+    }
     setSelectedAnswer(key);
     setIsAnswered(true);
 
     const isCorrect = key === questionData.answer;
     
-    // Nếu đúng, tự động qua câu sau 1.2s để tạo cảm giác liền mạch
-    if (isCorrect) {
-      setTimeout(() => {
-        onAnswer(true);
-      }, 1200);
-    }
+    // Bỏ tự động chuyển qua câu sau để người dùng có thời gian đọc giải thích
   };
 
-  const handleDontKnow = () => {
+  const handleDontKnow = (event) => {
     if (isAnswered) return;
+    if (event) {
+      event.preventDefault();
+      event.currentTarget.blur();
+    }
     setSelectedAnswer(null); // null tức là bỏ qua
     setIsAnswered(true);
   };
 
   const handleNext = () => {
-    onAnswer(false); // Bấm tiếp tục nghĩa là câu này sai hoặc không biết -> cần lặp lại
+    onAnswer(isCorrect); // Truyền isCorrect để App.jsx biết có lặp lại câu này không
   };
 
   const isCorrect = selectedAnswer === questionData.answer;
   const isSkipped = selectedAnswer === null;
 
-  // Lắng nghe sự kiện bàn phím để nhấn phím bất kỳ qua bài khi trả lời sai
+  // Lắng nghe sự kiện bàn phím để chọn đáp án (A,B,C,D) hoặc qua bài
   useEffect(() => {
-    if (isAnswered && (!isCorrect || isSkipped)) {
-      const handleKeyDown = (e) => {
-        e.preventDefault(); // Tránh cuộn trang nếu nhấn Space
+    const handleKeyDown = (e) => {
+      // Bỏ qua nếu đang dùng phím tắt hệ thống (Ctrl+R, F5, v.v...)
+      if (e.ctrlKey || e.metaKey || e.altKey || e.key.startsWith('F')) return;
+
+      if (isAnswered) {
+        // Đã trả lời -> Nhấn phím bất kỳ (như Space, Enter, chữ cái) để Next
+        e.preventDefault(); 
         handleNext();
-      };
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [isAnswered, isCorrect, isSkipped]);
+      } else {
+        // Chưa trả lời -> Chọn A, B, C, D
+        const key = e.key.toUpperCase();
+        if (['A', 'B', 'C', 'D'].includes(key) && questionData.options[key]) {
+          e.preventDefault();
+          handleOptionClick(key);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAnswered, isCorrect, questionData]);
 
   return (
     <div className="learn-container">
@@ -56,7 +70,16 @@ const QuizletLearnMode = ({ questionData, onAnswer }) => {
         
         {/* Vùng hiển thị câu hỏi */}
         <div className="question-section">
-          <span className="question-label">ĐỊNH NGHĨA / CÂU HỎI</span>
+          <div className="question-header">
+            <span className="question-label">ĐỊNH NGHĨA / CÂU HỎI</span>
+            <button 
+              className={`bookmark-btn ${isBookmarked ? 'bookmarked' : ''}`}
+              onClick={onToggleBookmark}
+              title={isBookmarked ? "Bỏ đánh dấu" : "Đánh dấu câu này"}
+            >
+              {isBookmarked ? '★' : '☆'}
+            </button>
+          </div>
           <div className="question-text">
             {questionData.question}
           </div>
@@ -84,8 +107,8 @@ const QuizletLearnMode = ({ questionData, onAnswer }) => {
                 <button 
                   key={key} 
                   className={btnClass}
-                  onClick={() => handleOptionClick(key)}
-                  disabled={isAnswered}
+                  onClick={(e) => handleOptionClick(key, e)}
+                  style={{ pointerEvents: isAnswered ? 'none' : 'auto' }}
                 >
                   <div className="option-key">{key}</div>
                   <div className="option-value">{value}</div>
@@ -102,28 +125,32 @@ const QuizletLearnMode = ({ questionData, onAnswer }) => {
           )}
         </div>
 
-        {/* Khu vực thông báo kết quả (Chỉ hiện khi đã trả lời sai hoặc không biết) */}
-        {isAnswered && (!isCorrect || isSkipped) && (
-          <div className="feedback-section">
-            <div className="feedback-title">Hãy học lại câu này nhé!</div>
-            
-            <div className="correct-answer-box">
-              <div className="correct-answer-label">Đáp án đúng là:</div>
-              <div className="correct-answer-value">
-                {questionData.answer}. {questionData.options[questionData.answer]}
-              </div>
+        {/* Khu vực thông báo kết quả (Hiện khi đã trả lời) */}
+        {isAnswered && (
+          <div className="feedback-section" style={{ backgroundColor: isCorrect ? '#f0fdf6' : '#fff8f7', borderTopColor: isCorrect ? '#86efac' : '#ffd4cd' }}>
+            <div className="feedback-title" style={{ color: isCorrect ? '#16a34a' : 'var(--danger)' }}>
+              {isCorrect ? 'Chính xác!' : 'Hãy học lại câu này nhé!'}
             </div>
             
-            <button className="btn-next" onClick={handleNext}>
-              Tiếp tục (Nhấn Phím Bất Kỳ)
-            </button>
-          </div>
-        )}
+            {(!isCorrect || isSkipped) && (
+              <div className="correct-answer-box">
+                <div className="correct-answer-label">Đáp án đúng là:</div>
+                <div className="correct-answer-value">
+                  {questionData.answer}. {questionData.options[questionData.answer]}
+                </div>
+              </div>
+            )}
 
-        {/* Thông báo trả lời đúng */}
-        {isAnswered && isCorrect && (
-          <div className="feedback-correct-toast">
-            Chính xác!
+            {questionData.explanation && (
+              <div className="explanation-box" style={{ marginTop: '10px', padding: '10px', backgroundColor: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #3b82f6', textAlign: 'left' }}>
+                <strong style={{ color: '#1e293b' }}>Giải thích:</strong>
+                <p style={{ margin: '5px 0 0 0', color: '#475569', fontSize: '0.95rem' }}>{questionData.explanation}</p>
+              </div>
+            )}
+            
+            <button className="btn-next" onClick={handleNext} style={{ backgroundColor: isCorrect ? 'var(--success)' : 'var(--primary)' }}>
+              Tiếp tục (Phím bất kỳ)
+            </button>
           </div>
         )}
 

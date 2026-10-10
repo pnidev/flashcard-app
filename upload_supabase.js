@@ -24,7 +24,9 @@ async function uploadData() {
       id: q.id,
       question: q.question,
       options: q.options,
-      answer: q.answer
+      answer: q.answer,
+      chapter: q.chapter || null,
+      explanation: q.explanation || null
     }));
 
     const { error } = await supabase
