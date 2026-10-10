@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
 const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookmark }) => {
-  const [selectedAnswer, setSelectedAnswer] = useState(null);
+  const [selectedAnswers, setSelectedAnswers] = useState([]);
   const [isAnswered, setIsAnswered] = useState(false);
+
+  const isMultiSelect = questionData.answer.length > 1;
 
   // Reset state khi câu hỏi mới được truyền vào
   useEffect(() => {
-    setSelectedAnswer(null);
+    setSelectedAnswers([]);
     setIsAnswered(false);
   }, [questionData]);
 
@@ -14,14 +16,27 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
     if (isAnswered) return; // Không cho click thêm nếu đã trả lời
     if (event) {
       event.preventDefault();
-      event.currentTarget.blur(); // Chống giật trang khi mất focus
+      if (!isMultiSelect) event.currentTarget.blur(); // Chỉ blur nếu là single select (để tránh giật khi mất focus)
     }
-    setSelectedAnswer(key);
-    setIsAnswered(true);
 
-    const isCorrect = key === questionData.answer;
-    
-    // Bỏ tự động chuyển qua câu sau để người dùng có thời gian đọc giải thích
+    if (isMultiSelect) {
+      setSelectedAnswers(prev => {
+        if (prev.includes(key)) return prev.filter(k => k !== key);
+        return [...prev, key];
+      });
+    } else {
+      setSelectedAnswers([key]);
+      setIsAnswered(true);
+    }
+  };
+
+  const handleSubmitMulti = (event) => {
+    if (selectedAnswers.length === 0 || isAnswered) return;
+    if (event) {
+      event.preventDefault();
+      event.currentTarget.blur();
+    }
+    setIsAnswered(true);
   };
 
   const handleDontKnow = (event) => {
@@ -30,16 +45,18 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
       event.preventDefault();
       event.currentTarget.blur();
     }
-    setSelectedAnswer(null); // null tức là bỏ qua
+    setSelectedAnswers([]); // null tức là bỏ qua
     setIsAnswered(true);
   };
+
+  const userAnsSorted = [...selectedAnswers].sort().join('');
+  const correctAnsSorted = questionData.answer.split('').sort().join('');
+  const isCorrect = isAnswered && selectedAnswers.length > 0 && userAnsSorted === correctAnsSorted;
+  const isSkipped = isAnswered && selectedAnswers.length === 0;
 
   const handleNext = () => {
     onAnswer(isCorrect); // Truyền isCorrect để App.jsx biết có lặp lại câu này không
   };
-
-  const isCorrect = selectedAnswer === questionData.answer;
-  const isSkipped = selectedAnswer === null;
 
   // Lắng nghe sự kiện bàn phím để chọn đáp án (A,B,C,D) hoặc qua bài
   useEffect(() => {
@@ -52,17 +69,19 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
         e.preventDefault(); 
         handleNext();
       } else {
-        // Chưa trả lời -> Chọn A, B, C, D
         const key = e.key.toUpperCase();
         if (['A', 'B', 'C', 'D'].includes(key) && questionData.options[key]) {
           e.preventDefault();
           handleOptionClick(key);
+        } else if (isMultiSelect && e.key === 'Enter') {
+          e.preventDefault();
+          handleSubmitMulti();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAnswered, isCorrect, questionData]);
+  }, [isAnswered, isCorrect, questionData, selectedAnswers, isMultiSelect]);
 
   return (
     <div className="learn-container">
@@ -71,7 +90,7 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
         {/* Vùng hiển thị câu hỏi */}
         <div className="question-section">
           <div className="question-header">
-            <span className="question-label">ĐỊNH NGHĨA / CÂU HỎI</span>
+            <span className="question-label">ĐỊNH NGHĨA / CÂU HỎI {isMultiSelect && <span style={{color: 'var(--primary)', marginLeft: '5px'}}>(Chọn nhiều đáp án)</span>}</span>
             <button 
               className={`bookmark-btn ${isBookmarked ? 'bookmarked' : ''}`}
               onClick={onToggleBookmark}
@@ -91,15 +110,21 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
           <div className="options-grid">
             {Object.entries(questionData.options).map(([key, value]) => {
               
-              // Logic xác định class CSS cho từng nút đáp án sau khi đã trả lời
+              const isSelected = selectedAnswers.includes(key);
+              const isActuallyCorrect = questionData.answer.includes(key);
+              
               let btnClass = "option-btn";
               if (isAnswered) {
-                if (key === questionData.answer) {
+                if (isActuallyCorrect) {
                   btnClass += " correct-btn"; // Luôn làm nổi bật đáp án đúng
-                } else if (key === selectedAnswer) {
+                } else if (isSelected && !isActuallyCorrect) {
                   btnClass += " incorrect-btn"; // Nếu chọn sai thì bôi đỏ đáp án đã chọn
                 } else {
                   btnClass += " faded-btn"; // Mờ đi các đáp án khác
+                }
+              } else {
+                if (isSelected) {
+                  btnClass += " selected-btn";
                 }
               }
 
@@ -117,6 +142,13 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
             })}
           </div>
 
+          {/* Nút Submit cho Multi-select */}
+          {!isAnswered && isMultiSelect && selectedAnswers.length > 0 && (
+            <button onClick={handleSubmitMulti} style={{ width: '100%', backgroundColor: 'var(--primary)', color: 'white', border: 'none', padding: '1rem', borderRadius: '12px', fontSize: '1rem', fontWeight: '700', marginTop: '1rem', cursor: 'pointer', transition: 'all 0.2s' }}>
+              Kiểm tra đáp án (Nhấn Enter)
+            </button>
+          )}
+
           {/* Nút Không biết (Chỉ hiện khi chưa trả lời) */}
           {!isAnswered && (
             <button className="btn-dont-know" onClick={handleDontKnow}>
@@ -132,14 +164,7 @@ const QuizletLearnMode = ({ questionData, onAnswer, isBookmarked, onToggleBookma
               {isCorrect ? 'Chính xác!' : 'Hãy học lại câu này nhé!'}
             </div>
             
-            {(!isCorrect || isSkipped) && (
-              <div className="correct-answer-box">
-                <div className="correct-answer-label">Đáp án đúng là:</div>
-                <div className="correct-answer-value">
-                  {questionData.answer}. {questionData.options[questionData.answer]}
-                </div>
-              </div>
-            )}
+
 
             {questionData.explanation && (
               <div className="explanation-box" style={{ marginTop: '10px', padding: '10px', backgroundColor: '#f8fafc', borderRadius: '8px', borderLeft: '4px solid #3b82f6', textAlign: 'left' }}>

@@ -12,6 +12,7 @@ function App() {
   const [roundComplete, setRoundComplete] = useState(false);
   const [selectedChapter, setSelectedChapter] = useState('all');
   const [studyMode, setStudyMode] = useState('normal'); // 'normal' hoặc 'bookmarked'
+  const [questionTurn, setQuestionTurn] = useState(0);
   
   // State quản lý dữ liệu từ Supabase
   const [allQuestions, setAllQuestions] = useState([]);
@@ -174,6 +175,7 @@ function App() {
   };
 
   const handleAnswer = (isCorrect) => {
+    setQuestionTurn(prev => prev + 1);
     setRoundQueue(prevQueue => {
       const newQueue = [...prevQueue];
       const currentQ = newQueue.shift();
@@ -349,16 +351,53 @@ function App() {
   }
 
   if (roundComplete) {
+    const totalQuestionsInMode = getFilteredQuestions(studyMode).length;
+    const questionsCompleted = Math.min((roundIndex + 1) * totalQuestionsInRound, totalQuestionsInMode);
+    const overallProgressPercent = totalQuestionsInMode > 0 ? Math.round((questionsCompleted / totalQuestionsInMode) * 100) : 0;
+    const isFinishedAll = questionsCompleted >= totalQuestionsInMode;
+
     return (
-      <div className="app-container" style={{ justifyContent: 'center', height: '100vh' }}>
+      <div className="app-container" style={{ justifyContent: 'flex-start', minHeight: '100vh' }}>
         {renderTopBarInGame()}
-        <h1>Hoàn thành vòng học!</h1>
-        <p style={{ color: '#166534', marginBottom: '2rem', fontSize: '1.2rem' }}>
-          Tuyệt vời! Bạn đã nắm vững {totalQuestionsInRound} câu hỏi.
-        </p>
-        <button className="start-btn" onClick={handleNextRound}>
-          Học vòng tiếp theo ({roundIndex + 2})
-        </button>
+        
+        <div className="learn-card" style={{ padding: '2.5rem 2rem', textAlign: 'center', maxWidth: '500px', margin: '2rem auto', width: '90%' }}>
+          <h1 style={{ margin: '0 0 1rem 0', color: '#1e293b', fontSize: '1.75rem', fontWeight: '800' }}>Hoàn thành vòng {roundIndex + 1}!</h1>
+          <p style={{ color: '#16a34a', marginBottom: '1.5rem', fontSize: '1.1rem', fontWeight: '600' }}>
+            Tuyệt vời! Bạn đã nắm vững thêm {totalQuestionsInRound} câu hỏi.
+          </p>
+
+          <div style={{ backgroundColor: '#f8fafc', padding: '1.5rem', borderRadius: '12px', marginBottom: '2rem', border: '1px solid #e2e8f0' }}>
+            <div style={{ color: '#475569', fontSize: '1.05rem', marginBottom: '0.5rem', fontWeight: '600' }}>
+              Tiến độ {getChapterName()}:
+            </div>
+            <div style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--primary)', marginBottom: '1rem' }}>
+              {questionsCompleted} / {totalQuestionsInMode} câu
+            </div>
+            
+            <div className="progress-bar-container" style={{ margin: '0 auto', height: '10px', backgroundColor: '#e2e8f0' }}>
+              <div 
+                className="progress-bar-fill" 
+                style={{ width: `${overallProgressPercent}%`, backgroundColor: 'var(--primary)' }}
+              ></div>
+            </div>
+          </div>
+
+          {!isFinishedAll ? (
+            <button className="start-btn" onClick={handleNextRound} style={{ width: '100%', fontSize: '1.1rem', padding: '1rem' }}>
+              Học vòng tiếp theo ({roundIndex + 2})
+            </button>
+          ) : (
+            <div>
+              <p style={{ color: 'var(--success)', fontWeight: '700', fontSize: '1.1rem', marginBottom: '1.5rem' }}>🎉 Chúc mừng bạn đã hoàn thành phần này! 🎉</p>
+              <button className="start-btn" onClick={() => setHasStarted(false)} style={{ width: '100%', backgroundColor: 'var(--success)', marginBottom: '1rem' }}>
+                Quay lại Menu chính
+              </button>
+              <button className="reset-btn" onClick={(e) => handleResetProgress(e, studyMode)} style={{ width: '100%' }}>
+                Học lại từ đầu
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -393,7 +432,7 @@ function App() {
 
       {currentQuestion && (
         <Flashcard 
-          key={currentQuestion.id} 
+          key={`${currentQuestion.id}-${questionTurn}`} 
           questionData={currentQuestion} 
           onAnswer={handleAnswer}
           isBookmarked={bookmarks.includes(currentQuestion.id)}

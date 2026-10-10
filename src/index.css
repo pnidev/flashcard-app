@@ -17,13 +17,12 @@
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
   padding: 0;
   box-sizing: border-box;
   overflow-x: hidden;
+  background-color: var(--gray-bg);
 }
 
 #root {
@@ -175,6 +174,16 @@ h1 {
 .faded-btn {
   opacity: 0.5;
   transform: scale(0.98);
+}
+
+.selected-btn {
+  border-color: var(--primary) !important;
+  background-color: #eff6ff !important;
+}
+
+.selected-btn .option-key {
+  background-color: var(--primary);
+  color: white;
 }
 
 .btn-dont-know {
