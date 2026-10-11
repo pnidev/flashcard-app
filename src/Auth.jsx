@@ -16,16 +16,27 @@ export default function Auth({ onClose }) {
     if (isLogin) {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       error = signInError;
+      if (!error) {
+        onClose(); // Đóng modal khi đăng nhập thành công
+      }
     } else {
-      const { error: signUpError } = await supabase.auth.signUp({ email, password });
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+      });
       error = signUpError;
-      if (!error) alert('Vui lòng kiểm tra email của bạn để xác nhận đăng ký!');
+      if (!error) {
+        if (data?.session) {
+          alert('Đăng ký thành công!');
+          onClose(); // Đóng modal và vào app luôn
+        } else {
+          alert('Vui lòng kiểm tra email của bạn để xác nhận đăng ký!');
+        }
+      }
     }
 
     if (error) {
       alert(error.error_description || error.message);
-    } else if (isLogin) {
-      onClose(); // Đóng modal khi đăng nhập thành công
     }
     setLoading(false);
   };

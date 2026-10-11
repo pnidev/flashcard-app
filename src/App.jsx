@@ -22,8 +22,66 @@ function App() {
   const [user, setUser] = useState(null);
   const [showAuth, setShowAuth] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
+  const [_progressVersion, setProgressVersion] = useState(0);
 
   const QUESTIONS_PER_ROUND = 10;
+
+  // Tự động chuyển tiến trình của khách (guest) sang tài khoản khi user vừa đăng nhập
+  const migrateGuestProgress = (userId) => {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('flashcard_progress_guest_')) {
+          const userKey = key.replace('flashcard_progress_guest_', `flashcard_progress_${userId}_`);
+          const guestData = localStorage.getItem(key);
+          if (guestData && !localStorage.getItem(userKey)) {
+            localStorage.setItem(userKey, guestData);
+          }
+        }
+      }
+      setProgressVersion(v => v + 1);
+    } catch (e) {
+      console.error('Error migrating guest progress:', e);
+    }
+  };
+
+  // Đồng bộ tiến trình từ Supabase Cloud về máy
+  const syncCloudProgress = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_progress')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (!error && data && data.length > 0) {
+        data.forEach(row => {
+          const key = `flashcard_progress_${userId}_${row.chapter}_${row.mode}`;
+          const localStr = localStorage.getItem(key);
+          const cloudState = {
+            index: row.round_index,
+            queueIds: row.queue_ids || [],
+            total: row.total || 10,
+            isCompletedAll: row.is_completed_all || false,
+            updatedAt: new Date(row.updated_at).getTime()
+          };
+
+          if (!localStr) {
+            localStorage.setItem(key, JSON.stringify(cloudState));
+          } else {
+            try {
+              const local = JSON.parse(localStr);
+              if ((cloudState.updatedAt || 0) > (local.updatedAt || 0)) {
+                localStorage.setItem(key, JSON.stringify(cloudState));
+              }
+            } catch {
+              localStorage.setItem(key, JSON.stringify(cloudState));
+            }
+          }
+        });
+        setProgressVersion(v => v + 1);
+      }
+    } catch {}
+  };
 
   useEffect(() => {
     async function fetchQuestions() {
@@ -38,11 +96,21 @@ function App() {
     fetchQuestions();
 
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      if (currentUser) {
+        migrateGuestProgress(currentUser.id);
+        syncCloudProgress(currentUser.id);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      if (currentUser) {
+        migrateGuestProgress(currentUser.id);
+        syncCloudProgress(currentUser.id);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -94,12 +162,41 @@ function App() {
     return `flashcard_progress_${userKey}_${selectedChapter}_${mode}`;
   };
 
+  const getProgressInfo = (mode) => {
+    const savedStr = localStorage.getItem(getProgressKey(mode));
+    if (!savedStr) return null;
+    try {
+      const saved = JSON.parse(savedStr);
+      if (saved.isCompletedAll) {
+        return {
+          label: '🎉 Đã hoàn thành (Bấm để ôn lại)',
+          isCompletedAll: true,
+          saved
+        };
+      }
+      if (saved.queueIds && saved.queueIds.length > 0) {
+        return {
+          label: `Tiếp tục Vòng ${saved.index + 1} (còn ${saved.queueIds.length} câu)`,
+          isCompletedAll: false,
+          saved
+        };
+      }
+      return {
+        label: `Tiếp tục Vòng ${saved.index + 1}`,
+        isCompletedAll: false,
+        saved
+      };
+    } catch {
+      return null;
+    }
+  };
+
   const startRound = (index, mode, savedState = null) => {
     const questionsToUse = getFilteredQuestions(mode);
     let roundQuestions = [];
     let totalQuestions = QUESTIONS_PER_ROUND;
 
-    if (savedState && savedState.queueIds) {
+    if (savedState && savedState.queueIds && savedState.queueIds.length > 0) {
       roundQuestions = savedState.queueIds.map(id => questionsToUse.find(q => q.id === id)).filter(Boolean);
       totalQuestions = savedState.total || QUESTIONS_PER_ROUND;
       index = savedState.index || 0;
@@ -130,21 +227,46 @@ function App() {
     setHasStarted(true);
     setStudyMode(mode);
     
-    saveState(mode, index, roundQuestions, totalQuestions);
+    saveState(mode, index, roundQuestions, totalQuestions, false);
   };
 
-  const saveState = (mode, index, queue, total) => {
-    localStorage.setItem(getProgressKey(mode), JSON.stringify({
+  const saveState = async (mode, index, queue, total, isCompletedAll = false) => {
+    const queueIds = queue ? queue.map(q => q.id) : [];
+    const stateObj = {
       index: index,
-      queueIds: queue.map(q => q.id),
-      total: total
-    }));
+      queueIds: queueIds,
+      total: total,
+      isCompletedAll: isCompletedAll,
+      updatedAt: Date.now()
+    };
+
+    localStorage.setItem(getProgressKey(mode), JSON.stringify(stateObj));
+    setProgressVersion(v => v + 1);
+
+    if (user) {
+      try {
+        await supabase.from('user_progress').upsert({
+          user_id: user.id,
+          chapter: selectedChapter,
+          mode: mode,
+          round_index: index,
+          queue_ids: queueIds,
+          total: total,
+          is_completed_all: isCompletedAll,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id,chapter,mode' });
+      } catch {}
+    }
   };
 
   const handleStartNormal = () => {
-    const savedStr = localStorage.getItem(getProgressKey('normal'));
-    if (savedStr) {
-      startRound(0, 'normal', JSON.parse(savedStr));
+    const info = getProgressInfo('normal');
+    if (info && !info.isCompletedAll) {
+      if (info.saved.queueIds && info.saved.queueIds.length > 0) {
+        startRound(info.saved.index, 'normal', info.saved);
+      } else {
+        startRound(info.saved.index, 'normal');
+      }
     } else {
       startRound(0, 'normal');
     }
@@ -155,9 +277,13 @@ function App() {
       setShowAuth(true);
       return;
     }
-    const savedStr = localStorage.getItem(getProgressKey('bookmarked'));
-    if (savedStr) {
-      startRound(0, 'bookmarked', JSON.parse(savedStr));
+    const info = getProgressInfo('bookmarked');
+    if (info && !info.isCompletedAll) {
+      if (info.saved.queueIds && info.saved.queueIds.length > 0) {
+        startRound(info.saved.index, 'bookmarked', info.saved);
+      } else {
+        startRound(info.saved.index, 'bookmarked');
+      }
     } else {
       startRound(0, 'bookmarked');
     }
@@ -168,10 +294,23 @@ function App() {
     startRound(nextIndex, studyMode);
   };
 
-  const handleResetProgress = (e, mode) => {
+  const handleResetProgress = async (e, mode, shouldRestart = false) => {
     e.stopPropagation();
     localStorage.removeItem(getProgressKey(mode));
-    startRound(0, mode);
+    if (user) {
+      try {
+        await supabase
+          .from('user_progress')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('chapter', selectedChapter)
+          .eq('mode', mode);
+      } catch {}
+    }
+    setProgressVersion(v => v + 1);
+    if (shouldRestart) {
+      startRound(0, mode);
+    }
   };
 
   const handleAnswer = (isCorrect) => {
@@ -186,9 +325,18 @@ function App() {
 
       if (newQueue.length === 0) {
         setRoundComplete(true);
-        localStorage.removeItem(getProgressKey(studyMode));
+        const questionsToUse = getFilteredQuestions(studyMode);
+        const nextIndex = roundIndex + 1;
+        const nextStartIndex = nextIndex * QUESTIONS_PER_ROUND;
+        const isFinished = nextStartIndex >= questionsToUse.length;
+
+        if (isFinished) {
+          saveState(studyMode, roundIndex, [], totalQuestionsInRound, true);
+        } else {
+          saveState(studyMode, nextIndex, [], QUESTIONS_PER_ROUND, false);
+        }
       } else {
-        saveState(studyMode, roundIndex, newQueue, totalQuestionsInRound);
+        saveState(studyMode, roundIndex, newQueue, totalQuestionsInRound, false);
       }
 
       return newQueue;
@@ -311,12 +459,12 @@ function App() {
                 <div style={{ display: 'flex', gap: '12px' }}>
                   <button className="start-btn" onClick={handleStartNormal} style={{ margin: 0, flex: 1, padding: '14px', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                     <span style={{ fontSize: '1.1rem' }}>Toàn bộ câu hỏi</span>
-                    {localStorage.getItem(getProgressKey('normal')) && (
-                      <span style={{ fontSize: '0.8rem', opacity: 0.9, fontWeight: 'normal' }}>Tiếp tục Vòng {JSON.parse(localStorage.getItem(getProgressKey('normal'))).index + 1}</span>
+                    {getProgressInfo('normal') && (
+                      <span style={{ fontSize: '0.8rem', opacity: 0.9, fontWeight: 'normal' }}>{getProgressInfo('normal').label}</span>
                     )}
                   </button>
-                  {localStorage.getItem(getProgressKey('normal')) && (
-                    <button className="reset-btn" onClick={(e) => handleResetProgress(e, 'normal')}>
+                  {getProgressInfo('normal') && (
+                    <button className="reset-btn" onClick={(e) => handleResetProgress(e, 'normal', false)} title="Đặt lại tiến độ">
                       <span style={{ fontSize: '1.2rem', display: 'block', marginBottom: '2px' }}>↺</span>
                       Reset
                     </button>
@@ -330,12 +478,12 @@ function App() {
                     style={{ margin: 0, flex: 1, padding: '14px', borderRadius: '12px', backgroundColor: '#f59e0b', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
                   >
                     <span style={{ fontSize: '1.1rem' }}>Chỉ câu đã đánh dấu</span>
-                    {localStorage.getItem(getProgressKey('bookmarked')) && (
-                      <span style={{ fontSize: '0.8rem', opacity: 0.9, fontWeight: 'normal' }}>Tiếp tục Vòng {JSON.parse(localStorage.getItem(getProgressKey('bookmarked'))).index + 1}</span>
+                    {getProgressInfo('bookmarked') && (
+                      <span style={{ fontSize: '0.8rem', opacity: 0.9, fontWeight: 'normal' }}>{getProgressInfo('bookmarked').label}</span>
                     )}
                   </button>
-                  {localStorage.getItem(getProgressKey('bookmarked')) && (
-                    <button className="reset-btn" onClick={(e) => handleResetProgress(e, 'bookmarked')}>
+                  {getProgressInfo('bookmarked') && (
+                    <button className="reset-btn" onClick={(e) => handleResetProgress(e, 'bookmarked', false)} title="Đặt lại tiến độ">
                       <span style={{ fontSize: '1.2rem', display: 'block', marginBottom: '2px' }}>↺</span>
                       Reset
                     </button>
@@ -392,7 +540,7 @@ function App() {
               <button className="start-btn" onClick={() => setHasStarted(false)} style={{ width: '100%', backgroundColor: 'var(--success)', marginBottom: '1rem' }}>
                 Quay lại Menu chính
               </button>
-              <button className="reset-btn" onClick={(e) => handleResetProgress(e, studyMode)} style={{ width: '100%' }}>
+              <button className="reset-btn" onClick={(e) => handleResetProgress(e, studyMode, true)} style={{ width: '100%' }}>
                 Học lại từ đầu
               </button>
             </div>
